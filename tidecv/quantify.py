@@ -164,9 +164,7 @@ class TIDERun:
 			# These classes are ignored for the whole image and not in the ground truth, so
 			# we can safely just remove these detections from the predictions at the start.
 			ignored_classes = self.gt._get_ignored_classes(image)
-			x = [pred for pred in x if pred['class'] not in ignored_classes]
-
-			self._eval_image(x, y)
+			self._eval_image(x, y, ignored_classes)
 
 		# Store a fixed version of all the errors for testing purposes
 		for error in self.errors:
@@ -193,7 +191,7 @@ class TIDERun:
 		self.errors.append(error)
 		self.error_dict[type(error)].append(error)
 
-	def _eval_image(self, preds:list, gt:list):
+	def _eval_image(self, preds:list, gt:list, ignored_classes: set):
 		
 		for truth in gt:
 			if not truth['ignore']:
@@ -215,16 +213,20 @@ class TIDERun:
 
 		for pred_idx, pred in enumerate(preds):
 
+			pred['info'] = {'iou': pred['iou']}
+			if pred['used']:
+				pred['info']['matched_with'] = pred['matched_with']
 			# None means that the prediction was ignored
+			if pred["class"] in ignored_classes:
+				pred["used"] = None
 			if pred['used'] is not None:
-				pred['info'] = {'iou': pred['iou']}
-				if pred['used']:
-					pred['info']['matched_with'] = pred['matched_with']
 				self.ap_data.push(pred['class'], pred['_id'], pred['score'], pred['used'], pred['info'])
 			
 			# ----- ERROR DETECTION ------ #
 			# This prediction is a negative, let's find out why
-			if self.run_errors and pred['used'] == False:
+			# Count errors even for ignored predictions, since these can still be
+			# useful once fixed.
+			if self.run_errors and pred['used'] in (False, None):
 				# Test for BackgroundError
 				if len(ex.gt) == 0: # Note this is ex.gt because it doesn't include ignore annotations
 					# There is no ground truth for this image, so just mark everything as BackgroundError
@@ -309,7 +311,9 @@ class TIDERun:
 			if data_point is not None:
 				if transform is not None:
 					data_point = transform(*data_point)
-				new_ap_data.push(_cls, _id, *data_point)
+				is_correct = data_point[1]
+				if is_correct or error.pred["used"] is not None:
+					new_ap_data.push(_cls, _id, *data_point)
 			
 		# Add back all the correct ones
 		for k in gt_pos.keys():
